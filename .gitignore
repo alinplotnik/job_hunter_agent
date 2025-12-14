@@ -220,7 +220,12 @@ new_resume_and_changes.txt
 project_status.txt
 interview_prep_real_content.txt
 interview_questions.txt
-interview_solutions.txt
+check_models.py
+debug_*.txt
+
+# --- Streamlit ---
+
+.streamlit/secrets.toml
 
 # IDE Settings
 .idea/

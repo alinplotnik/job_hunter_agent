@@ -18,7 +18,6 @@ if not api_key:
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel('gemini-flash-latest')
 
-
 # --- 2. Helper Functions ---
 
 def read_pdf(file_path):
@@ -71,130 +70,137 @@ def fetch_website_content(url):
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            text = soup.get_text(separator=' ', strip=True)
-            return text[:7000]
+            text = soup.get_text(' ', strip=True)
+            return text[:6000]  # Limit text to save context
         else:
             return None
     except Exception as e:
         print(f"Could not scrape {url}: {e}")
-        return None
+        return ""
 
 
-# --- 3. Main Logic ---
+# --- 3. Main Logic (Budget Version) ---
 
 def process_application(resume_text, job_description):
-    # --- PHASE 1: Resume Feedback ---
-    print("\n--- Phase 1: Team Lead Review ---")
-    prompt_resume = f"""
+    print("\n--- 📉 Running BUDGET Mode (2 API Calls Total) ---")
+
+    # --- API CALL #1: Everything in one go (Resume + Cover Letter + Keywords) ---
+    print("\n--- Step 1: Analyzing Profile & Generating Docs ---")
+
+    prompt_batch = f"""
     Act as a Hiring Manager for a Student/Intern position.
-    Job Desc: {job_description}. Resume: {resume_text}.
-    Provide bullet points to improve my resume. Focus on missing keywords suitable for a Junior.
+
+    Job Description: {job_description}
+    Resume: {resume_text}
+
+    TASK: Perform 3 actions and output a single JSON object.
+    1. "feedback": Bullet points to improve resume for this job.
+    2. "cover_letter": A professional cover letter (Student level).
+    3. "keywords": Extract top 3 technical skills (e.g. ["Python", "SQL", "AWS"]).
+
+    Output JSON format ONLY:
+    {{
+        "feedback": "string",
+        "cover_letter": "string",
+        "keywords": ["tech1", "tech2", "tech3"]
+    }}
     """
+
+    keywords = []
+
     try:
-        response_resume = model.generate_content(prompt_resume)
-        save_to_file("resume_feedback.txt", response_resume.text)
-    except Exception as e:
-        print(f"Error Phase 1: {e}")
+        response = model.generate_content(prompt_batch)
+        cleaned_json = response.text.replace("```json", "").replace("```", "").strip()
+        data = json.loads(cleaned_json)
 
-    # --- PHASE 2: Cover Letter ---
-    print("\n--- Phase 2: Writing Cover Letter ---")
-    prompt_cl = f"""
-    Write a Cover Letter for a Student/Intern position.
-    JD: {job_description}. Resume: {resume_text}.
-    Extract my details. Write in a professional, authentic voice.
+        # Save Outputs
+        save_to_file("resume_feedback.txt", data.get("feedback", "Error generating feedback"))
+        save_to_file("cover_letter.txt", data.get("cover_letter", "Error generating cover letter"))
+        keywords = data.get("keywords", [])
+
+        print(f"🔍 Extracted Keywords for Search: {keywords}")
+
+    except Exception as e:
+        print(f"❌ Critical Error in Step 1: {e}")
+        return  # Stop if step 1 fails
+
+    # --- Step 2: Python-only Search (Free) ---
+    print("\n--- Step 2: Gathering Interview Materials (No API Cost) ---")
+
+    combined_scraped_text = ""
+
+    for tech in keywords:
+        # Strict search on good sites
+        query = f"Top entry level {tech} interview questions freshers site:javatpoint.com OR site:geeksforgeeks.org OR site:interviewbit.com"
+        results = search_web(query, max_results=1)
+
+        for res in results:
+            url = res['href']
+            title = res['title']
+            time.sleep(2)  # Be polite
+
+            content = fetch_website_content(url)
+            if content:
+                combined_scraped_text += f"\n\n=== SOURCE: {title} (Topic: {tech}) ===\n{content}"
+
+    # --- API CALL #2: Extract Questions from ALL text at once ---
+    print("\n--- Step 3: Extracting Questions (Final API Call) ---")
+
+    if not combined_scraped_text:
+        print("❌ No content scraped. Check internet connection.")
+        return
+
+    prompt_extraction = f"""
+    I have collected text from several interview websites.
+
+    RAW TEXT:
+    {combined_scraped_text[:25000]} 
+
+    TASK:
+    Go through the sources and extract the BEST interview questions for a **Student/Junior**.
+
+    OUTPUT JSON List:
+    [
+        {{ "topic": "Python", "question": "...", "answer": "..." }},
+        {{ "topic": "SQL", "question": "...", "answer": "..." }}
+    ]
+
+    RULES:
+    1. Extract exactly 2 questions per topic found in the text.
+    2. One Conceptual, One Coding (if applicable).
+    3. Ignore senior-level questions.
     """
+
     try:
-        response_cl = model.generate_content(prompt_cl)
-        save_to_file("cover_letter.txt", response_cl.text)
+        response_q = model.generate_content(prompt_extraction)
+        cleaned_json_q = response_q.text.replace("```json", "").replace("```", "").strip()
+        qa_list = json.loads(cleaned_json_q)
+
+        # Format the output files
+        q_file = "--- INTERVIEW QUESTIONS ---\n\n"
+        sol_file = "--- SOLUTIONS ---\n\n"
+
+        for idx, item in enumerate(qa_list, 1):
+            topic = item.get('topic', 'General')
+            q = item.get('question')
+            a = item.get('answer')
+
+            q_file += f"[{topic}] Q{idx}: {q}\n\n"
+            sol_file += f"[{topic}] Q{idx}: {q}\nAnswer: {a}\n{'-' * 30}\n"
+
+        save_to_file("interview_questions.txt", q_file)
+        save_to_file("interview_solutions.txt", sol_file)
+
     except Exception as e:
-        print(f"Error Phase 2: {e}")
-
-    # --- PHASE 3: Smart Search (Junior Level) ---
-    print("\n--- Phase 3: Searching for Student/Junior Interview Questions ---")
-
-    # Step A: Identify Topics
-    prompt_topics = f"""
-    Analyze this Job Description: {job_description}.
-    Identify the top 3 technical skills. 
-    Output ONLY a comma-separated list. Example: Python, SQL, REST API
-    """
-    topics_text = model.generate_content(prompt_topics).text.strip()
-    topics_list = [t.strip() for t in topics_text.split(',')]
-    print(f"🔍 Key Topics: {topics_list}")
-
-    questions_file_content = f"--- INTERVIEW QUESTIONS (STUDENT LEVEL) ---\nTopics: {topics_list}\n\n"
-    solutions_file_content = f"--- SOLUTIONS & ANSWERS ---\nTopics: {topics_list}\n\n"
-
-    # Step B: Loop topics
-    for topic in topics_list:
-        query = f"Entry level student interview questions for {topic} GeeksforGeeks Medium"
-        search_results = search_web(query, max_results=1)
-
-        for result in search_results:
-            url = result['href']
-            title = result['title']
-            time.sleep(2)
-
-            raw_content = fetch_website_content(url)
-
-            if raw_content:
-                print(f"🧠 Extracting {topic} Q&A...")
-
-                # --- The Logic Update is HERE ---
-                analysis_prompt = f"""
-                Source text: {raw_content}
-                Current Topic: {topic}
-
-                TASK:
-                Extract the 2 BEST technical interview questions for a **Student/Junior** (0 experience).
-
-                CRITICAL SELECTION RULES:
-                1. IF the topic is a Programming Language (e.g., Python, Java, C++, JavaScript):
-                   - Question 1 MUST be **Conceptual/Theoretical** (e.g., "Difference between list and tuple").
-                   - Question 2 MUST be a **Coding Challenge** (e.g., "Write a function to...").
-
-                2. IF the topic is a Tool/Platform/Concept (e.g., AWS, Git, SQL, AI):
-                   - Focus on core concepts, commands, or definitions.
-
-                Output must be a valid JSON list of objects:
-                [
-                    {{"question": "The question text", "answer": "The answer summary"}}
-                ]
-                Do not add markdown formatting. Just the raw JSON string.
-                """
-                try:
-                    json_response = model.generate_content(analysis_prompt).text
-                    json_response = json_response.replace("```json", "").replace("```", "").strip()
-
-                    qa_list = json.loads(json_response)
-
-                    questions_file_content += f"### TOPIC: {topic}\n(Source: {title})\n"
-                    solutions_file_content += f"### TOPIC: {topic}\n(Source: {title})\n"
-
-                    for i, item in enumerate(qa_list, 1):
-                        q = item.get('question', 'N/A')
-                        a = item.get('answer', 'N/A')
-
-                        questions_file_content += f"Q{i}: {q}\n\n"
-                        solutions_file_content += f"Q{i}: {q}\n\nA{i}: {a}\n{'-' * 30}\n"
-
-                    questions_file_content += f"{'=' * 30}\n\n"
-                    solutions_file_content += f"{'=' * 30}\n\n"
-
-                except json.JSONDecodeError:
-                    print(f"⚠️ Could not parse JSON for {topic}. Saving raw text.")
-                    solutions_file_content += f"RAW ERROR FOR {topic}: {json_response}\n\n"
-                except Exception as e:
-                    print(f"Error analyzing {topic}: {e}")
-
-    save_to_file("interview_questions.txt", questions_file_content)
-    save_to_file("interview_solutions.txt", solutions_file_content)
+        print(f"❌ Error in Step 3: {e}")
+        # Fallback: Save raw text if parsing fails
+        save_to_file("debug_raw_scraped_content.txt", combined_scraped_text)
 
 
 # --- 4. Execution ---
 
 if __name__ == "__main__":
-    print("--- Job Hunter Agent Started ---")
+    print("--- Job Hunter Agent (Budget Edition) Started ---")
 
     resume_path = "resume.pdf"
     job_desc_path = "job_description.txt"
@@ -205,6 +211,6 @@ if __name__ == "__main__":
 
         if my_resume_content and job_desc_content:
             process_application(my_resume_content, job_desc_content)
-            print("\n--- 🏁 Done! Created 'interview_questions.txt' and 'interview_solutions.txt' ---")
+            print("\n--- 🏁 Done! (Only used 2 API credits) ---")
     else:
         print("❌ Error: Missing input files.")
