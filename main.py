@@ -1,7 +1,12 @@
 import os
+import time
+import json
 import google.generativeai as genai
 from dotenv import load_dotenv
 import PyPDF2
+from ddgs import DDGS
+import requests
+from bs4 import BeautifulSoup
 
 # --- 1. Configuration & Setup ---
 load_dotenv()
@@ -47,98 +52,144 @@ def save_to_file(filename, content):
         print(f"❌ Error saving {filename}: {e}")
 
 
-# --- 3. Main Logic (The Agent) ---
+def search_web(query, max_results=1):
+    print(f"🌐 Searching: '{query}'...")
+    try:
+        results = list(DDGS().text(query, max_results=max_results))
+        return results
+    except Exception as e:
+        print(f"Search error: {e}")
+        return []
+
+
+def fetch_website_content(url):
+    print(f"🕷️ Scraping: {url}...")
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            text = soup.get_text(separator=' ', strip=True)
+            return text[:7000]
+        else:
+            return None
+    except Exception as e:
+        print(f"Could not scrape {url}: {e}")
+        return None
+
+
+# --- 3. Main Logic ---
 
 def process_application(resume_text, job_description):
-    # --- PHASE 1: Resume Critique (Not Rewrite) ---
-    print("\n--- Phase 1: Team Lead Review (Critique) ---")
-
+    # --- PHASE 1: Resume Feedback ---
+    print("\n--- Phase 1: Team Lead Review ---")
     prompt_resume = f"""
-    Act as the Team Lead of the hiring team for this specific job description.
-    You are reviewing my resume to decide if I should be interviewed.
-
-    Job Description:
-    {job_description}
-
-    My Resume:
-    {resume_text}
-
-    TASK:
-    Do NOT rewrite the resume.
-    Instead, provide a specific feedback list (bullet points) on what I should change to pass your screening.
-    Focus on:
-    1. Missing keywords I should add.
-    2. Irrelevant sections I should remove or shorten.
-    3. Skills in the JD that are not emphasized enough in my resume.
-
-    Output format: A clear list of actionable "Recommended Changes".
+    Act as a Hiring Manager for a Student/Intern position.
+    Job Desc: {job_description}. Resume: {resume_text}.
+    Provide bullet points to improve my resume. Focus on missing keywords suitable for a Junior.
     """
-
     try:
         response_resume = model.generate_content(prompt_resume)
         save_to_file("resume_feedback.txt", response_resume.text)
     except Exception as e:
-        print(f"Error generating feedback: {e}")
+        print(f"Error Phase 1: {e}")
 
-    # --- PHASE 2: Personalized Cover Letter ---
-    print("\n--- Phase 2: Writing Personalized Cover Letter ---")
-
+    # --- PHASE 2: Cover Letter ---
+    print("\n--- Phase 2: Writing Cover Letter ---")
     prompt_cl = f"""
-    Write a specific Cover Letter for this application.
-
-    Source Material:
-    - Job Description: {job_description}
-    - My Resume: {resume_text}
-
-    INSTRUCTIONS:
-    1. EXTRACT my real name, phone, email, and LinkedIn from the resume text and place them at the top. DO NOT use placeholders like [Your Name].
-    2. Analyze the writing style and tone of my resume, and write the cover letter in that same voice (professional, authentic).
-    3. Adopt the company's culture tone found in the JD.
-    4. Connect my specific past projects (from resume) to their requirements.
-
-    Structure:
-    - Header (My details)
-    - Salutation (To "Hiring Team at [Company Name]")
-    - Body Paragraphs
-    - Sign-off
+    Write a Cover Letter for a Student/Intern position.
+    JD: {job_description}. Resume: {resume_text}.
+    Extract my details. Write in a professional, authentic voice.
     """
-
     try:
         response_cl = model.generate_content(prompt_cl)
         save_to_file("cover_letter.txt", response_cl.text)
     except Exception as e:
-        print(f"Error generating cover letter: {e}")
+        print(f"Error Phase 2: {e}")
 
-        # --- PHASE 3: Student/Junior Interview Questions ---
-        print("\n--- Phase 3: Generating Student-Level Interview Questions ---")
+    # --- PHASE 3: Smart Search (Junior Level) ---
+    print("\n--- Phase 3: Searching for Student/Junior Interview Questions ---")
 
-        prompt_questions = f"""
-        Act as a Technical Interviewer for a **Student/Junior Developer position (Internship)**.
+    # Step A: Identify Topics
+    prompt_topics = f"""
+    Analyze this Job Description: {job_description}.
+    Identify the top 3 technical skills. 
+    Output ONLY a comma-separated list. Example: Python, SQL, REST API
+    """
+    topics_text = model.generate_content(prompt_topics).text.strip()
+    topics_list = [t.strip() for t in topics_text.split(',')]
+    print(f"🔍 Key Topics: {topics_list}")
 
-        Based on the job description:
-        {job_description}
+    questions_file_content = f"--- INTERVIEW QUESTIONS (STUDENT LEVEL) ---\nTopics: {topics_list}\n\n"
+    solutions_file_content = f"--- SOLUTIONS & ANSWERS ---\nTopics: {topics_list}\n\n"
 
-        TASK:
-        Generate 3 coding interview questions suitable for a candidate with **0 years of commercial experience**.
+    # Step B: Loop topics
+    for topic in topics_list:
+        query = f"Entry level student interview questions for {topic} GeeksforGeeks Medium"
+        search_results = search_web(query, max_results=1)
 
-        Guidelines for the questions:
-        1. **Question 1 (Algorithmic):** A standard LeetCode Easy/Medium problem focusing on Arrays, Strings, or Hash Maps (Python Lists/Dicts).
-        2. **Question 2 (Practical Logic):** A small logic puzzle or data manipulation task (e.g., parsing a simple string or filtering a list).
-        3. **Question 3 (Basic OOP):** A very simple Object-Oriented Design task. Example: "Design a 'ShoppingCart' class with methods to add/remove items and calculate total." (Do NOT ask for complex System Design or Cloud Architecture).
+        for result in search_results:
+            url = result['href']
+            title = result['title']
+            time.sleep(2)
 
-        For each question provide:
-        1. Problem Name.
-        2. Description.
-        3. Example Input and Output.
+            raw_content = fetch_website_content(url)
 
-        Do NOT provide the solution code.
-        """
+            if raw_content:
+                print(f"🧠 Extracting {topic} Q&A...")
 
-        try:
-            response_q = model.generate_content(prompt_questions)
-            save_to_file("interview_prep.txt", response_q.text)
-        except Exception as e:
-            print(f"Error generating questions: {e}")
+                # --- The Logic Update is HERE ---
+                analysis_prompt = f"""
+                Source text: {raw_content}
+                Current Topic: {topic}
+
+                TASK:
+                Extract the 2 BEST technical interview questions for a **Student/Junior** (0 experience).
+
+                CRITICAL SELECTION RULES:
+                1. IF the topic is a Programming Language (e.g., Python, Java, C++, JavaScript):
+                   - Question 1 MUST be **Conceptual/Theoretical** (e.g., "Difference between list and tuple").
+                   - Question 2 MUST be a **Coding Challenge** (e.g., "Write a function to...").
+
+                2. IF the topic is a Tool/Platform/Concept (e.g., AWS, Git, SQL, AI):
+                   - Focus on core concepts, commands, or definitions.
+
+                Output must be a valid JSON list of objects:
+                [
+                    {{"question": "The question text", "answer": "The answer summary"}}
+                ]
+                Do not add markdown formatting. Just the raw JSON string.
+                """
+                try:
+                    json_response = model.generate_content(analysis_prompt).text
+                    json_response = json_response.replace("```json", "").replace("```", "").strip()
+
+                    qa_list = json.loads(json_response)
+
+                    questions_file_content += f"### TOPIC: {topic}\n(Source: {title})\n"
+                    solutions_file_content += f"### TOPIC: {topic}\n(Source: {title})\n"
+
+                    for i, item in enumerate(qa_list, 1):
+                        q = item.get('question', 'N/A')
+                        a = item.get('answer', 'N/A')
+
+                        questions_file_content += f"Q{i}: {q}\n\n"
+                        solutions_file_content += f"Q{i}: {q}\n\nA{i}: {a}\n{'-' * 30}\n"
+
+                    questions_file_content += f"{'=' * 30}\n\n"
+                    solutions_file_content += f"{'=' * 30}\n\n"
+
+                except json.JSONDecodeError:
+                    print(f"⚠️ Could not parse JSON for {topic}. Saving raw text.")
+                    solutions_file_content += f"RAW ERROR FOR {topic}: {json_response}\n\n"
+                except Exception as e:
+                    print(f"Error analyzing {topic}: {e}")
+
+    save_to_file("interview_questions.txt", questions_file_content)
+    save_to_file("interview_solutions.txt", solutions_file_content)
+
 
 # --- 4. Execution ---
 
@@ -149,12 +200,11 @@ if __name__ == "__main__":
     job_desc_path = "job_description.txt"
 
     if os.path.exists(resume_path) and os.path.exists(job_desc_path):
-        print("Files loaded. Sending to Gemini...")
         my_resume_content = read_pdf(resume_path)
         job_desc_content = read_text_file(job_desc_path)
 
         if my_resume_content and job_desc_content:
             process_application(my_resume_content, job_desc_content)
-            print("\n--- 🏁 Done! Check 'resume_feedback.txt', 'cover_letter.txt', and 'interview_prep.txt' ---")
+            print("\n--- 🏁 Done! Created 'interview_questions.txt' and 'interview_solutions.txt' ---")
     else:
-        print("❌ Error: Missing resume.pdf or job_description.txt")
+        print("❌ Error: Missing input files.")
