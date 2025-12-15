@@ -16,11 +16,19 @@ if not api_key:
     raise ValueError("API Key not found! Check your .env file.")
 
 genai.configure(api_key=api_key)
+
+# Use the stable Flash model
 model = genai.GenerativeModel('gemini-flash-latest')
+
+# Define input/output directories
+OUTPUT_DIR = "outputs"
+INPUT_DIR = "inputs"
+
 
 # --- 2. Helper Functions ---
 
 def read_pdf(file_path):
+    """Extracts text from a PDF file."""
     try:
         with open(file_path, 'rb') as file:
             reader = PyPDF2.PdfReader(file)
@@ -34,6 +42,7 @@ def read_pdf(file_path):
 
 
 def read_text_file(file_path):
+    """Reads a standard text file."""
     try:
         with open(file_path, 'r', encoding='utf-8') as file:
             return file.read()
@@ -43,15 +52,23 @@ def read_text_file(file_path):
 
 
 def save_to_file(filename, content):
+    """Saves content to a specific file inside the output directory."""
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+        print(f"📁 Created directory: {OUTPUT_DIR}")
+
+    filepath = os.path.join(OUTPUT_DIR, filename)
+
     try:
-        with open(filename, 'w', encoding='utf-8') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
-        print(f"✅ Saved successfully: {filename}")
+        print(f"✅ Saved successfully: {filepath}")
     except Exception as e:
         print(f"❌ Error saving {filename}: {e}")
 
 
 def search_web(query, max_results=1):
+    """Searches the web using DuckDuckGo."""
     print(f"🌐 Searching: '{query}'...")
     try:
         results = list(DDGS().text(query, max_results=max_results))
@@ -62,6 +79,7 @@ def search_web(query, max_results=1):
 
 
 def fetch_website_content(url):
+    """Scrapes text content from a given URL."""
     print(f"🕷️ Scraping: {url}...")
     try:
         headers = {
@@ -71,7 +89,7 @@ def fetch_website_content(url):
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             text = soup.get_text(' ', strip=True)
-            return text[:6000]  # Limit text to save context
+            return text[:6000]  # Limit text length
         else:
             return None
     except Exception as e:
@@ -79,96 +97,121 @@ def fetch_website_content(url):
         return ""
 
 
-# --- 3. Main Logic (Budget Version) ---
+# --- 3. Main Logic ---
 
 def process_application(resume_text, job_description):
-    print("\n--- 📉 Running BUDGET Mode (2 API Calls Total) ---")
+    """
+    Orchestrates the process with Hybrid Questions, Expanded Sources, and Transparency.
+    """
 
-    # --- API CALL #1: Everything in one go (Resume + Cover Letter + Keywords) ---
-    print("\n--- Step 1: Analyzing Profile & Generating Docs ---")
+    print("\n--- 📉 Running BUDGET Mode (Simulated Agent) ---")
+
+    # --- STEP 1: Analyze Profile ---
+    print("\n--- Step 1: Analyzing Profile & Detecting Experience Level ---")
 
     prompt_batch = f"""
-    Act as a Hiring Manager for a Student/Intern position.
-
+    Act as a Hiring Manager.
     Job Description: {job_description}
     Resume: {resume_text}
 
-    TASK: Perform 3 actions and output a single JSON object.
-    1. "feedback": Bullet points to improve resume for this job.
-    2. "cover_letter": A professional cover letter (Student level).
-    3. "keywords": Extract top 3 technical skills (e.g. ["Python", "SQL", "AWS"]).
+    TASK: Perform 4 actions.
+    1. "feedback": Bullet points to improve resume.
+    2. "cover_letter": A professional cover letter.
+    3. "keywords": Extract top 3 technical skills.
+    4. "experience_level": Choose one: "Entry-Level/Student", "Junior", "Mid-Level", "Senior".
 
     Output JSON format ONLY:
     {{
         "feedback": "string",
         "cover_letter": "string",
-        "keywords": ["tech1", "tech2", "tech3"]
+        "keywords": ["tech1", "tech2"],
+        "experience_level": "Entry-Level/Student"
     }}
     """
 
     keywords = []
+    experience_level = "Entry-Level/Student"
 
     try:
         response = model.generate_content(prompt_batch)
         cleaned_json = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(cleaned_json)
 
-        # Save Outputs
-        save_to_file("resume_feedback.txt", data.get("feedback", "Error generating feedback"))
-        save_to_file("cover_letter.txt", data.get("cover_letter", "Error generating cover letter"))
+        save_to_file("resume_feedback.txt", data.get("feedback", ""))
+        save_to_file("cover_letter.txt", data.get("cover_letter", ""))
         keywords = data.get("keywords", [])
+        experience_level = data.get("experience_level", "Entry-Level/Student")
 
-        print(f"🔍 Extracted Keywords for Search: {keywords}")
+        print(f"🎓 Detected Experience Level: {experience_level}")
+        print(f"🔍 Extracted Keywords: {keywords}")
 
     except Exception as e:
         print(f"❌ Critical Error in Step 1: {e}")
-        return  # Stop if step 1 fails
-
-    # --- Step 2: Python-only Search (Free) ---
-    print("\n--- Step 2: Gathering Interview Materials (No API Cost) ---")
-
-    combined_scraped_text = ""
-
-    for tech in keywords:
-        # Strict search on good sites
-        query = f"Top entry level {tech} interview questions freshers site:javatpoint.com OR site:geeksforgeeks.org OR site:interviewbit.com"
-        results = search_web(query, max_results=1)
-
-        for res in results:
-            url = res['href']
-            title = res['title']
-            time.sleep(2)  # Be polite
-
-            content = fetch_website_content(url)
-            if content:
-                combined_scraped_text += f"\n\n=== SOURCE: {title} (Topic: {tech}) ===\n{content}"
-
-    # --- API CALL #2: Extract Questions from ALL text at once ---
-    print("\n--- Step 3: Extracting Questions (Final API Call) ---")
-
-    if not combined_scraped_text:
-        print("❌ No content scraped. Check internet connection.")
         return
 
-    prompt_extraction = f"""
-    I have collected text from several interview websites.
+    # --- STEP 2: Skip Search (Direct Knowledge) ---
 
-    RAW TEXT:
-    {combined_scraped_text[:25000]} 
+    # --- STEP 3: Generate Hybrid Questions (Transparency & Quality Mode) ---
+    print("\n--- Step 3: Generating Hybrid Interview Prep (Expanded Sources) ---")
+
+    prompt_extraction = f"""
+    You are a Technical Interview Coach.
+    Target Audience: {experience_level}
+    Topics: {keywords}
 
     TASK:
-    Go through the sources and extract the BEST interview questions for a **Student/Junior**.
+    Create a JSON list of interview materials.
+    For each topic in {keywords}, generate exactly 2 items based on the topic type:
 
-    OUTPUT JSON List:
+    --- LOGIC BRANCHING ---
+
+    **CASE A: If the topic is a PROGRAMMING LANGUAGE** (Python, Java, SQL, etc.):
+       1. **Item 1 (Theory):** A standard interview question found on **GeeksforGeeks, Javatpoint, or W3Schools**.
+          - Focus on definitions, differences (e.g., "Interface vs Abstract Class"), and core concepts.
+       2. **Item 2 (Practice):** - **PRIORITY:** Retrieve a **REAL LeetCode Problem** (Name, Description, Constraints).
+          - **FALLBACK:** If no specific LeetCode problem exists, create a custom challenge but **SET 'is_real': false**.
+
+    **CASE B: If the topic is a TOOL or CONCEPT** (Git, Agile, Docker, Linux, Networking):
+       1. **Item 1 (Theory):** A classic conceptual question derived from **GeeksforGeeks or Javatpoint** (e.g., "Git Architecture", "Docker Layers").
+       2. **Item 2 (Scenario):** - **PRIORITY:** Retrieve a famous/common scenario discussed on **StackOverflow** (e.g., "Detached HEAD", "Port already in use error").
+          - **FALLBACK:** If you cannot find a specific famous scenario, create a realistic production incident but **SET 'is_real': false**.
+
+    --- CRITICAL QUALITY RULES ---
+
+    1. **DIFFICULTY CALIBRATION**:
+       - Strictly match {experience_level}.
+       - Student/Entry: Basic usage, definitions, simple flows.
+       - Senior: Internals, complex conflicts, production incidents.
+
+    2. **ANSWER QUALITY**:
+       - **Coding/LeetCode**: Must include the `Starter Code`, `Explanation`, and the `Full Solution Code`.
+       - **Theory/Scenario**: Clear, step-by-step professional answer.
+
+    3. **TRANSPARENCY (The "Flagging" Rule)**:
+       - If the question/scenario is based on a real external source (LeetCode/StackOverflow/GFG), set "is_real": true.
+       - If you invented it, set "is_real": false.
+
+    Output Format (JSON ONLY):
     [
-        {{ "topic": "Python", "question": "...", "answer": "..." }},
-        {{ "topic": "SQL", "question": "...", "answer": "..." }}
+        {{ 
+            "topic": "Python", 
+            "type": "LeetCode", 
+            "is_real": true,
+            "problem_name": "Two Sum", 
+            "content": "Given an array...",
+            "code_snippet": "def twoSum...",
+            "solution": "Use a hash map..."
+        }},
+        {{
+            "topic": "Git",
+            "type": "Scenario",
+            "is_real": true, 
+            "problem_name": "Fixing Detached HEAD",
+            "content": "You are in 'detached HEAD' state...",
+            "code_snippet": "git checkout...",
+            "solution": "1. Run git status..."
+        }}
     ]
-
-    RULES:
-    1. Extract exactly 2 questions per topic found in the text.
-    2. One Conceptual, One Coding (if applicable).
-    3. Ignore senior-level questions.
     """
 
     try:
@@ -176,34 +219,54 @@ def process_application(resume_text, job_description):
         cleaned_json_q = response_q.text.replace("```json", "").replace("```", "").strip()
         qa_list = json.loads(cleaned_json_q)
 
-        # Format the output files
-        q_file = "--- INTERVIEW QUESTIONS ---\n\n"
-        sol_file = "--- SOLUTIONS ---\n\n"
+        q_file = f"--- INTERVIEW PREPARATION ({experience_level.upper()}) ---\n\n"
+        sol_file = f"--- SOLUTIONS & EXPLANATIONS ---\n\n"
 
         for idx, item in enumerate(qa_list, 1):
             topic = item.get('topic', 'General')
-            q = item.get('question')
-            a = item.get('answer')
+            q_type = item.get('type', 'General')
+            is_real = item.get('is_real', False)
+            prob_name = item.get('problem_name', 'Question')
+            content = item.get('content', '')
+            code = item.get('code_snippet', '')
+            solution = item.get('solution', '')
 
-            q_file += f"[{topic}] Q{idx}: {q}\n\n"
-            sol_file += f"[{topic}] Q{idx}: {q}\nAnswer: {a}\n{'-' * 30}\n"
+            # Dynamic Header
+            if "LeetCode" in q_type:
+                source_label = "[REAL LEETCODE]" if is_real else "[AI GENERATED CHALLENGE]"
+                header = f"🧩 [{topic}] {source_label}: {prob_name}"
+            elif "Scenario" in q_type:
+                source_label = "[REAL SCENARIO - StackOverflow/GFG]" if is_real else "[AI GENERATED SCENARIO]"
+                header = f"⚙️ [{topic}] {source_label}: {prob_name}"
+            else:
+                header = f"📚 [{topic}] [THEORY - GFG/Javatpoint]" if is_real else "[AI GENERATED SCENARIO]"
+
+            # Write Question
+            entry = f"{header}\n{'-' * 50}\n"
+            entry += f"Description/Question:\n{content}\n"
+            if code and code != "N/A":
+                entry += f"\n💻 Starter Code:\n{code}\n"
+
+            q_file += entry + f"\n\n"
+
+            # Write Solution
+            sol_file += f"Question {idx}: {header}\n"
+            sol_file += f"Answer/Solution:\n{solution}\n"
+            sol_file += f"{'=' * 50}\n\n"
 
         save_to_file("interview_questions.txt", q_file)
         save_to_file("interview_solutions.txt", sol_file)
 
     except Exception as e:
         print(f"❌ Error in Step 3: {e}")
-        # Fallback: Save raw text if parsing fails
-        save_to_file("debug_raw_scraped_content.txt", combined_scraped_text)
 
-
-# --- 4. Execution ---
+# --- 4. Execution Entry Point ---
 
 if __name__ == "__main__":
     print("--- Job Hunter Agent (Budget Edition) Started ---")
 
-    resume_path = "resume.pdf"
-    job_desc_path = "job_description.txt"
+    resume_path = os.path.join(INPUT_DIR, "resume.pdf")
+    job_desc_path = os.path.join(INPUT_DIR, "job_description.txt")
 
     if os.path.exists(resume_path) and os.path.exists(job_desc_path):
         my_resume_content = read_pdf(resume_path)
@@ -211,6 +274,6 @@ if __name__ == "__main__":
 
         if my_resume_content and job_desc_content:
             process_application(my_resume_content, job_desc_content)
-            print("\n--- 🏁 Done! (Only used 2 API credits) ---")
+            print("\n--- 🏁 Done! Created files in 'outputs' directory ---")
     else:
-        print("❌ Error: Missing input files.")
+        print(f"❌ Error: Missing input files in '{INPUT_DIR}' directory.")
