@@ -1,9 +1,10 @@
 import os
 import time
 import json
+import re
 import google.generativeai as genai
 from dotenv import load_dotenv
-import PyPDF2
+import pdfplumber
 from ddgs import DDGS
 import requests
 from bs4 import BeautifulSoup
@@ -30,12 +31,20 @@ INPUT_DIR = "inputs"
 def read_pdf(file_path):
     """Extracts text from a PDF file."""
     try:
-        with open(file_path, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() or ""
-            return text
+        text = ""
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text
+
+        # *************** Added "Censor" Logic: Check if the PDF is actually readable
+        # If text is empty or very short (< 50 chars), it is likely an image scan or corrupted.
+        if len(text.strip()) < 50:
+            print(f"❌ BLOCKING: The PDF ({file_path}) contains almost no text. It might be an image/scan.")
+            return None
+
+        return text
     except Exception as e:
         print(f"Error reading PDF ({file_path}): {e}")
         return None
@@ -108,6 +117,18 @@ def process_application(resume_text, job_description):
 
     print("\n--- 📉 Running BUDGET Mode (Simulated Agent) ---")
 
+    print("🔒 Sanitizing resume text (removing PII)...")
+
+    # 1. Redact Email Addresses
+    # Regex explanation: Looks for characters around an '@' symbol and replaces them
+    resume_text = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[EMAIL_HIDDEN]', resume_text)
+
+    # 2. Redact Phone Numbers
+    # Regex explanation: Looks for patterns like +972-50-1234567, 050-1234567, etc.
+    resume_text = re.sub(r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', '[PHONE_HIDDEN]', resume_text)
+
+    print("✅ Privacy check complete. Personal info hidden from AI.")
+
     # =========================================================================
     # STEP 0: Advanced ATS Technical Check
     # =========================================================================
@@ -121,6 +142,11 @@ def process_application(resume_text, job_description):
     ---------------------
     {resume_text[:3000]} ... (truncated)
     ---------------------
+    *** IMPORTANT NOTE ON PRIVACY ***
+    The text "[EMAIL_HIDDEN]" and "[PHONE_HIDDEN]" are placeholders inserted by our security system. 
+    IF YOU SEE THESE PLACEHOLDERS, TREAT THEM AS VALID, PERFECTLY FORMATTED CONTACT INFO. 
+    DO NOT penalize the score for missing contact info if these tags are present.
+    
     TASK: Perform a deep technical audit on readability.
     Check for these specific fatal errors:
     1. **Parsing Logic / Layout:** - Are sentences broken or mixed due to multi-column layout?
@@ -132,6 +158,7 @@ def process_application(resume_text, job_description):
     4. **Graphics/Bars:** - Does the text imply the use of "skill bars" or "graphs" (e.g., disconnected numbers like "80%", "4/5")? ATS cannot read these.
 
     Output a JSON report:
+    CRITICAL: Output ONLY valid JSON. Do not write "Here is the JSON" or any intro text.
     {{
         "is_readable": true/false,
         "score_1_to_10": 8,
@@ -145,19 +172,19 @@ def process_application(resume_text, job_description):
     try:
         response_ats = model.generate_content(prompt_ats)
         raw_text = response_ats.text
-        cleaned_json_ats = raw_text.replace("```json", "").replace("```", "").strip()
+        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
 
-        try:
-            ats_data = json.loads(cleaned_json_ats)
-        except json.JSONDecodeError:
-            print(f"⚠️ Warning: Model returned non-JSON. Raw: '{raw_text[:100]}...'")
-            ats_data = {
-                "score_1_to_10": 0,
-                "recommended_filename": "Error_Check_Logs.pdf",
-                "extracted_name": "Unknown",
-                "critical_issues": ["API Error: Could not parse response (Safety Filter or Empty)"],
-                "deduction_reasoning": "The AI model returned an invalid response. This often happens if the resume contains sensitive info that triggers safety filters."
-            }
+        if json_match:
+            cleaned_json_ats = json_match.group(0)
+            try:
+                ats_data = json.loads(cleaned_json_ats)
+            except json.JSONDecodeError:
+                print(f"⚠️ JSON Decode Error. The extracted text was: {cleaned_json_ats[:100]}...")
+                raise  # Re-raise to trigger the except block below
+        else:
+            print(f"⚠️ Could not find JSON braces in response: {raw_text[:100]}...")
+            raise Exception("No JSON found in response")
+
         score = ats_data.get('score_1_to_10', 0)
 
         print(f"\n🤖 ATS Readability Score: {score}/10")
@@ -187,6 +214,7 @@ def process_application(resume_text, job_description):
 
     except Exception as e:
         print(f"⚠️ Could not perform ATS check: {e}")
+        print(f"DEBUG info - Raw Response was: {raw_text if 'raw_text' in locals() else 'No response'}")
 
     # =========================================================================
     # STEP 1: Analyze Profile & Detect Experience Level
@@ -203,10 +231,20 @@ def process_application(resume_text, job_description):
 
     TASK: Perform 4 actions and output a JSON.
 
-    1. "feedback": Provide bullet points to improve the resume SPECIFICALLY for this job.
+    1. "feedback": Provide a structured critique to improve the resume SPECIFICALLY for this job.
        - **PERSPECTIVE:** Analyze as both an **HR Recruiter** (scanning for clarity/keywords) and a **Tech Team Lead** (looking for technical depth).
        - **RULE:** Do NOT encourage inventing skills or experiences the candidate does not have. Focus exclusively on how to better frame and highlight the *existing* truth.
-
+       - **LANGUAGE & GRAMMAR:** Strictly check for spelling errors, typos, and awkward phrasing. 
+       - **PROFESSIONAL SUMMARY:** Analyze the "Summary" or "About" section. Is it tailored to this specific Job Description? Suggest edits to sharpen the focus while maintaining the candidate's original voice.
+       - **KEYWORDS & BUZZWORDS:** Identify high-impact keywords from the Job Description that are missing in the resume. Suggest where to add them (e.g., in Skills or descriptions).
+       - **AMBIGUITY & IMPACT:** Identify vague adjectives or "fluff" (e.g., "significantly improved," "played a key role," "extensive experience") that inflate achievements without substance. Suggest replacing them with concrete verbs and specific metrics (What exactly did you do?).
+       - **CONTENT DENSITY:** Is the resume too crowded or too long? Point out areas that are "fluff" and can be shortened.
+       - **SECTION ORDERING:** Evaluate if the section order suits the candidate's level:
+       - **Student/Entry:** Education and Projects should usually come *before* Work Experience (if there is less experience).
+       - **Experienced:** Work Experience should come first.
+       - If the order is wrong, flag it.
+       - **OTHER CRITICAL OBSERVATIONS:** **Do NOT limit your feedback to the categories above.** If you spot *any* other issues (e.g., formatting logic, tone inconsistencies, missing sections, red flags) or have creative suggestions to make the resume stand out, please include them here.
+       
     2. "cover_letter": Write a professional, concise, and sincere cover letter.
        - **FORMATTING RULES (Strict):**
              1. **TOP HEADER:** Place Candidate Name, Email, and Phone at the very top. Use contact details from the resume only (if missing, leave blank, do not invent).
@@ -292,6 +330,9 @@ def process_application(resume_text, job_description):
        - Strictly match {experience_level}.
        - Student/Entry: Basic Algorithms (Easy/Medium).
        - Senior: System Design, Internals (Medium/Hard).
+       - **Proficiency Label:** For each question, assign a label:
+         - "MUST KNOW": Fundamental knowledge required for this role/level.
+         - "ADVANCED/BONUS": Impressive knowledge that distinguishes top candidates but is not mandatory.
 
     2. **SOLUTION RELIABILITY & VERIFICATION**:
        - **Coding Questions**: MUST include `Starter Code`, `Full Solution`, `Complexity`, and `verification_link`.
@@ -306,6 +347,7 @@ def process_application(resume_text, job_description):
         {{ 
             "topic": "Python", 
             "type": "LeetCode", 
+            "proficiency_level": "MUST KNOW",
             "is_real": true,
             "problem_name": "Two Sum", 
             "verification_link": "https://leetcode.com/problems/two-sum/",
@@ -328,6 +370,7 @@ def process_application(resume_text, job_description):
         for idx, item in enumerate(qa_list, 1):
             topic = item.get('topic', 'General')
             q_type = item.get('type', 'General')
+            level = item.get('proficiency_level', 'General Info')  # שדה חדש לרמת קושי
             is_real = item.get('is_real', False)
             prob_name = item.get('problem_name', 'Question')
             link = item.get('verification_link', 'N/A')
@@ -339,13 +382,13 @@ def process_application(resume_text, job_description):
             # --- Dynamic Header Logic ---
             if "LeetCode" in q_type:
                 source_label = "[REAL LEETCODE]" if is_real else "[AI CHALLENGE]"
-                header = f"🧩 [{topic}] {source_label}: {prob_name}"
+                header = f"🧩 [{topic}] {source_label} [{level}]: {prob_name}"
             elif "Scenario" in q_type:
                 source_label = "[REAL SCENARIO]" if is_real else "[AI SCENARIO]"
-                header = f"⚙️ [{topic}] {source_label}: {prob_name}"
+                header = f"⚙️ [{topic}] {source_label} [{level}]: {prob_name}"
             else:
                 source_label = "[REAL THEORY]" if is_real else "[AI THEORY]"
-                header = f"📚 [{topic}] {source_label}: {prob_name}"
+                header = f"📚 [{topic}] {source_label} [{level}]: {prob_name}"
 
             # --- Write Question File ---
             entry = f"{header}\n{'-' * 50}\n"
