@@ -8,6 +8,9 @@ import pdfplumber
 from ddgs import DDGS
 import requests
 from bs4 import BeautifulSoup
+import fitz  # PyMuPDF: To convert PDF pages to images
+from PIL import Image
+import io
 
 # --- 1. Configuration & Setup ---
 load_dotenv()
@@ -106,26 +109,121 @@ def fetch_website_content(url):
         return ""
 
 
+# ************** START CHANGE: Added Visual ATS Check Functions **************
+def convert_first_page_to_image(pdf_path):
+    """
+    Converts the first page of a PDF into a PIL Image object.
+    Required for the visual comparison logic.
+    """
+    try:
+        doc = fitz.open(pdf_path)
+        page = doc.load_page(0)  # Get first page
+        pix = page.get_pixmap()  # Render page to an image
+        img_data = pix.tobytes("png")  # Convert to PNG bytes
+        return Image.open(io.BytesIO(img_data))
+    except Exception as e:
+        print(f"⚠️ Error converting PDF to image: {e}")
+        return None
+
+
+def check_ats_compatibility_visual(pdf_path, extracted_text):
+    """
+    Sends the VISUAL image of the resume AND the EXTRACTED text to Gemini.
+    Asks Gemini to judge if the extraction ruined the layout (e.g., mixed columns).
+    """
+    print("\n--- 👁️ Running Visual ATS Logic Check (Image vs. Text) ---")
+
+    # 1. Get the image
+    resume_image = convert_first_page_to_image(pdf_path)
+    if not resume_image:
+        print("❌ Could not generate image from PDF. Skipping visual check.")
+        return None
+
+    # 2. Prepare the prompt
+    prompt_visual = """
+    I am providing you with two things:
+    1. An IMAGE of a resume (how a human sees it).
+    2. The RAW TEXT extracted from that resume by a computer (how an ATS sees it).
+
+    YOUR TASK:
+    compare the visual layout vs. the extracted text to identify "Parsing Risks".
+    The Raw Text is:
+    ----------------
+    {text_snippet}
+    ----------------
+
+   Look for these specific FATAL discrepancies:
+    1. **Multi-Column Mix-up:** Does the text read straight across the page, mixing left and right columns together?
+    2. **Table Destruction:** If there are tables, is the text jumbled?
+    3. **Hidden Text/Graphics:** Is there text in the image (like skill bars or logos) that is completely missing or garbage in the raw text?
+    4. **Header/Footer Intrusion:** Do page headers/footers appear in the *middle* of sentences in the raw text?
+    
+    Example of failure: 
+    Image has "Skills" on the left and "Experience" on the right.
+    Raw text says: "Java Python Team Leader Project Manager" (mixing lines from both sides).
+
+    OUTPUT JSON ONLY:
+    CRITICAL: Output ONLY valid JSON. Do not write "Here is the JSON" or any intro text.
+    {{
+        "layout_risk": "HIGH" (if text is unreadable/mixed) or "LOW" (if text respects order),
+        "issue_detected": "Briefly describe the specific structural mismatch.",
+        "advice": "Actionable advice (e.g., 'Remove tables', 'Switch to single column', 'Remove icons')."
+    }}
+    """
+
+    # Inject first 1500 chars of text into prompt (enough to spot column mixing)
+    final_prompt = prompt_visual.format(text_snippet=extracted_text[:1500])
+
+    try:
+        # Send both Image and Text prompt to Gemini
+        response = model.generate_content([final_prompt, resume_image])
+
+        # Clean json
+        cleaned_json = response.text.replace("```json", "").replace("```", "").strip()
+        data = json.loads(cleaned_json)
+        return data
+
+    except Exception as e:
+        print(f"⚠️ Visual Check Error: {e}")
+        return None
+
+
+# ************** END CHANGE **************
+
 # --- 3. Main Logic ---
 
-def process_application(resume_text, job_description):
+# ************** START CHANGE: Updated arguments and added Visual Check Logic **************
+def process_application(resume_path, resume_text, job_description):
     """
-    Orchestrates the process with professionally translated prompts and dynamic date.
-    Fixed indentation and variable scoping.
+    Orchestrates the process.
+    NOW ACCEPTS 'resume_path' to enable visual checking.
     """
-    from datetime import datetime  # For dynamic date injection
+    from datetime import datetime
 
     print("\n--- 📉 Running BUDGET Mode (Simulated Agent) ---")
 
-    print("🔒 Sanitizing resume text (removing PII)...")
+    # --- [NEW] Visual Layout Check (Does NOT stop execution, just reports) ---
+    visual_report = check_ats_compatibility_visual(resume_path, resume_text)
 
-    # 1. Redact Email Addresses
-    # Regex explanation: Looks for characters around an '@' symbol and replaces them
-    resume_text = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[EMAIL_HIDDEN]', resume_text)
+    if visual_report:
+        print(f"\n📸 Visual Layout Risk: {visual_report.get('layout_risk')}")
+        print(f"⚠️ Issue: {visual_report.get('issue_detected')}")
 
-    # 2. Redact Phone Numbers
-    # Regex explanation: Looks for patterns like +972-50-1234567, 050-1234567, etc.
-    resume_text = re.sub(r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', '[PHONE_HIDDEN]', resume_text)
+        # Save specific report for visual issues
+        visual_warning = f"--- VISUAL FORMAT CHECK ---\n"
+        visual_warning += f"DATE: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        visual_warning += f"RISK LEVEL: {visual_report.get('layout_risk')}\n"
+        visual_warning += f"ISSUE: {visual_report.get('issue_detected')}\n"
+        visual_warning += f"ADVICE: {visual_report.get('advice')}\n"
+        save_to_file("ats_visual_check.txt", visual_warning)
+    # -------------------------------------------------------------------------
+
+    print("🔒 Creating sanitized version for logs (Keeping original for LLM)...")
+
+    # We create a COPY for safe logging, but keep resume_text INTAC for the LLM
+    resume_text_safe = resume_text
+    resume_text_safe = re.sub(r'[\w.-]+@[\w.-]+\.\w+', '[EMAIL_HIDDEN]', resume_text_safe)
+    resume_text_safe = re.sub(r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', '[PHONE_HIDDEN]', resume_text_safe)
 
     print("✅ Privacy check complete. Personal info hidden from AI.")
 
@@ -140,7 +238,7 @@ def process_application(resume_text, job_description):
 
     Here is the RAW TEXT extracted from a candidate's PDF resume:
     ---------------------
-    {resume_text[:3000]} ... (truncated)
+    {resume_text_safe[:3000]} ... (truncated)
     ---------------------
     *** IMPORTANT NOTE ON PRIVACY ***
     The text "[EMAIL_HIDDEN]" and "[PHONE_HIDDEN]" are placeholders inserted by our security system. 
@@ -428,7 +526,10 @@ if __name__ == "__main__":
         job_desc_content = read_text_file(job_desc_path)
 
         if my_resume_content and job_desc_content:
-            process_application(my_resume_content, job_desc_content)
+            # ************** START CHANGE: Passing resume_path to function **************
+            process_application(resume_path, my_resume_content, job_desc_content)
+            # ************** END CHANGE **************
+
             print("\n--- 🏁 Done! Created files in 'outputs' directory ---")
     else:
         print(f"❌ Error: Missing input files in '{INPUT_DIR}' directory.")
