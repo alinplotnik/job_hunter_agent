@@ -204,16 +204,20 @@ def process_application(resume_path, resume_text, job_description):
 
     # --- [NEW] Visual Layout Check (Does NOT stop execution, just reports) ---
     visual_report = check_ats_compatibility_visual(resume_path, resume_text)
+    visual_risk_level = "LOW"
+    visual_issue_desc = "None"
 
     if visual_report:
-        print(f"\n📸 Visual Layout Risk: {visual_report.get('layout_risk')}")
-        print(f"⚠️ Issue: {visual_report.get('issue_detected')}")
+        visual_risk_level = visual_report.get('layout_risk', 'LOW')
+        visual_issue_desc = visual_report.get('issue_detected', 'None')
 
-        # Save specific report for visual issues
+        print(f"\n📸 Visual Layout Risk: {visual_risk_level}")
+        print(f"⚠️ Issue: {visual_issue_desc}")
+
         visual_warning = f"--- VISUAL FORMAT CHECK ---\n"
         visual_warning += f"DATE: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-        visual_warning += f"RISK LEVEL: {visual_report.get('layout_risk')}\n"
-        visual_warning += f"ISSUE: {visual_report.get('issue_detected')}\n"
+        visual_warning += f"RISK LEVEL: {visual_risk_level}\n"
+        visual_warning += f"ISSUE: {visual_issue_desc}\n"
         visual_warning += f"ADVICE: {visual_report.get('advice')}\n"
         save_to_file("ats_visual_check.txt", visual_warning)
     # -------------------------------------------------------------------------
@@ -231,10 +235,26 @@ def process_application(resume_path, resume_text, job_description):
     # STEP 0: Advanced ATS Technical Check
     # =========================================================================
     print("\n--- Step 0: Performing Deep ATS Technical Analysis ---")
+    visual_context_injection = ""
+    if visual_risk_level.upper() == "HIGH":
+        print("🚨 INJECTION ACTIVE: Forcing ATS to penalize score due to visual mismatch.")  # DEBUG PRINT
+        visual_context_injection = f"""
+            !!! CRITICAL WARNING FROM VISUAL SCAN !!!
+            A separate visual analysis compared the PDF image to the extracted text.
+            RESULT: HIGH RISK.
+            DETECTED ISSUE: {visual_issue_desc}
 
+          INSTRUCTION TO ATS AGENT:
+            1. The text below is TRUNCATED/CORRUPTED compared to the PDF image.
+            2. You MUST overrides any positive formatting findings.
+            3. FORCE the 'score_1_to_10' to be MAXIMUM 5 (or lower).
+            4. Add the phrase "Visual-Text Mismatch (Severe Truncation)" to the 'critical_issues' list.
+            """
     # We ask Gemini to simulate a strict parser
     prompt_ats = f"""
     Act as a strict ATS (Applicant Tracking System) Parser algorithm.
+    
+    {visual_context_injection}  <-- This inserts the warning if needed
 
     Here is the RAW TEXT extracted from a candidate's PDF resume:
     ---------------------
@@ -246,6 +266,7 @@ def process_application(resume_path, resume_text, job_description):
     DO NOT penalize the score for missing contact info if these tags are present.
     
     TASK: Perform a deep technical audit on readability.
+    Output a JSON report with "is_readable", "score_1_to_10", "critical_issues", "deduction_reasoning".
     Check for these specific fatal errors:
     1. **Parsing Logic / Layout:** - Are sentences broken or mixed due to multi-column layout?
        - Can you clearly verify the Email and Phone number? (If they were in the Header/Footer of the PDF, they might be missing here).
@@ -261,7 +282,7 @@ def process_application(resume_path, resume_text, job_description):
         "is_readable": true/false,
         "score_1_to_10": 8,
         "extracted_name": "Name Found in Text",
-        "recommended_filename": "FirstName_LastName_Position.pdf",
+        "recommended_filename": "FirstName_LastName_CV.pdf (Do NOT use 'Student' or 'Junior' in filename)",
         "critical_issues": ["Issue 1", "Issue 2"],
         "deduction_reasoning": "Score reduced by 2 points because contact info is missing (likely in header) and Section Headers are non-standard."
     }}
