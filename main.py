@@ -366,9 +366,14 @@ def process_application(resume_path, resume_text, job_description):
        
     2. "cover_letter": Write a professional, concise, and sincere cover letter.
        - **FORMATTING RULES (Strict):**
-             1. **TOP HEADER:** Place Candidate Name, Email, and Phone at the very top. Use contact details from the resume only (if missing, leave blank, do not invent).
-             2. **DATE:** Place the date "{current_date}" BELOW the contact info.
-             3. **RECIPIENT:** Place "Hiring Team" or Company Name below the date.
+             1. **NO TOP HEADER:** Do NOT put the candidate's name or contact info at the top.
+             2. **DATE:** Place the date "{current_date}" at the very top.
+             3. **SALUTATION:** Use "Dear Hiring Team," (or "Dear Hiring Manager,").
+             4. **SIGNATURE & CONTACT:** End the letter with "Sincerely,", followed by:
+                - The Candidate's Name
+                - The Email Address (extracted from resume)
+                - The Phone Number (extracted from resume)
+                - **Layout:** Name on one line. Email | Phone on the next line.
        - **TONE:** Authentic, direct, and conversational. Avoid overly formal words, "fluff", or "AI-sounding" language. Keep it brief.
        - **CONTENT:** Do NOT summarize the resume (the recruiter already has it). Focus on **"Why THIS company and THIS team?"**.
        - **THE HOOK:** Identify a specific project, hobby, or technical interest from the resume (e.g., an AI/Computer Vision project) and factually connect it to the company's product/domain. Show genuine passion through facts, not flattery.
