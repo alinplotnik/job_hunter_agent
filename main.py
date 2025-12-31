@@ -5,7 +5,7 @@ import re
 import google.generativeai as genai
 from dotenv import load_dotenv
 import pdfplumber
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 import requests
 from bs4 import BeautifulSoup
 import fitz  # PyMuPDF: To convert PDF pages to images
@@ -30,6 +30,36 @@ INPUT_DIR = "inputs"
 
 
 # --- 2. Helper Functions ---
+
+def validate_content_is_resume(text_snippet):
+    """
+    Uses Gemini to quickly check if the text looks like a Resume/CV.
+    Returns: (bool, reason)
+    """
+    print("🕵️‍♀️ sanity check: Verifying if file is actually a resume...")
+
+    # We only send the first 1000 characters to save tokens
+    prompt_check = f"""
+    Analyze the following text snippet. 
+    Does this look like a Resume, CV, or Professional Profile?
+
+    TEXT:
+    {text_snippet[:1000]}
+
+    OUTPUT JSON ONLY:
+    {{
+        "is_resume": true/false,
+        "reason": "Brief explanation"
+    }}
+    """
+
+    try:
+        response = model.generate_content(prompt_check)
+        data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
+        return data.get("is_resume", False), data.get("reason", "Unknown")
+    except Exception as e:
+        print(f"⚠️ Validation skipped due to error: {e}")
+        return True, "Validation Error (Defaulting to True)"
 
 def read_pdf(file_path):
     """Extracts text from a PDF file."""
@@ -200,6 +230,17 @@ def process_application(resume_path, resume_text, job_description):
     """
     from datetime import datetime
 
+    # Initialize a results dictionary to return to the UI
+    results_pack = {}
+
+    is_resume, reason = validate_content_is_resume(resume_text)
+
+    if not is_resume:
+        print(f"⛔ STOPPING: This does not look like a resume. Reason: {reason}")
+        return {
+            "fatal_error": f"This does not look like a resume. Reason: {reason}"
+        }
+
     print("\n--- 📉 Running BUDGET Mode (Simulated Agent) ---")
 
     # --- [NEW] Visual Layout Check (Does NOT stop execution, just reports) ---
@@ -220,6 +261,9 @@ def process_application(resume_path, resume_text, job_description):
         visual_warning += f"ISSUE: {visual_issue_desc}\n"
         visual_warning += f"ADVICE: {visual_report.get('advice')}\n"
         save_to_file("ats_visual_check.txt", visual_warning)
+
+        if visual_risk_level == "HIGH":
+            results_pack["visual_warning"] = visual_report
     # -------------------------------------------------------------------------
 
     print("🔒 Creating sanitized version for logs (Keeping original for LLM)...")
@@ -330,8 +374,15 @@ def process_application(resume_path, resume_text, job_description):
         readable_report += f"NOTE: If the score is below 8, please fix the layout issues in Canva/Word."
 
         save_to_file("ats_readability_report.txt", readable_report)
+        results_pack["ats_score"] = score
+        results_pack["ats_report"] = readable_report
 
     except Exception as e:
+        if "429" in str(e):
+            print("🛑 Quota Exceeded. Stopping execution.")
+            return {
+                "fatal_error": "out of API KEY tokens. Try again tomorrow."
+            }
         print(f"⚠️ Could not perform ATS check: {e}")
         print(f"DEBUG info - Raw Response was: {raw_text if 'raw_text' in locals() else 'No response'}")
 
@@ -365,7 +416,7 @@ def process_application(resume_path, resume_text, job_description):
        - **OTHER CRITICAL OBSERVATIONS:** **Do NOT limit your feedback to the categories above.** If you spot *any* other issues (e.g., formatting logic, tone inconsistencies, missing sections, red flags) or have creative suggestions to make the resume stand out, please include them here.
        
     2. "cover_letter": Write a professional, concise, and sincere cover letter.
-       - **FORMATTING RULES (Strict):**
+       - **FORMATTING RULES (Strict):No more then 3 paragraphs and no double hyphen **
              1. **NO TOP HEADER:** Do NOT put the candidate's name or contact info at the top.
              2. **DATE:** Place the date "{current_date}" at the very top.
              3. **SALUTATION:** Use "Dear Hiring Team," (or "Dear Hiring Manager,").
@@ -409,6 +460,8 @@ def process_application(resume_path, resume_text, job_description):
 
         save_to_file("resume_feedback.txt", feedback_data)
         save_to_file("cover_letter.txt", data.get("cover_letter", ""))
+        results_pack["feedback"] = feedback_data
+        results_pack["cover_letter"] = data.get("cover_letter", "")
         keywords = data.get("keywords", [])
         experience_level = data.get("experience_level", "Entry-Level/Student")
 
@@ -416,8 +469,11 @@ def process_application(resume_path, resume_text, job_description):
         print(f"🔍 Extracted Keywords (Based on JD): {keywords}")
 
     except Exception as e:
+        if "429" in str(e):
+            return {
+                "fatal_error": "out of API KEY tokens. Try again tomorrow."            }
         print(f"❌ Critical Error in Step 1: {e}")
-        return
+        return results_pack
 
     # =========================================================================
     # STEP 2: Generate Hybrid Questions (Verified & Linked)
@@ -535,10 +591,14 @@ def process_application(resume_path, resume_text, job_description):
 
         save_to_file("interview_questions.txt", q_file)
         save_to_file("interview_solutions.txt", sol_file)
+        results_pack["interview_prep"] = q_file + "\n\n" + sol_file
 
     except Exception as e:
+        if "429" in str(e):
+            return {
+                "fatal_error": "out of API KEY tokens. Try again tomorrow."            }
         print(f"❌ Error in Step 2: {e}")
-
+    return results_pack
 # --- 4. Execution Entry Point ---
 
 if __name__ == "__main__":
