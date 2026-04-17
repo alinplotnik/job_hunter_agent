@@ -1,22 +1,73 @@
-# 🤖 AI Job Hunter Agent
+# AI Job Hunter Agent
 
-A smart career assistant built with Python, Streamlit, and Google Gemini API.
-This agent analyzes resumes against job descriptions to generate tailored cover letters and improvement suggestions.
+A Streamlit web app that analyzes a resume against a job description using Gemini and returns:
+- ATS readability report
+- resume feedback
+- cover letter draft
+- interview prep questions and solutions
 
-## 🚀 Features
-- **Resume Analysis:** Compares candidate skills with job requirements.
-- **Cover Letter Generation:** writes a personalized cover letter in the appropriate language (Hebrew/English).
-- **Resume Feedback:** Suggests specific tweaks to improve ATS matching.
+## Run Locally
 
-## 🛠️ Tech Stack
-- **Python 3.10+**
-- **Streamlit** (Frontend)
-- **Google Gemini 1.5 Flash** (LLM Engine)
-- **Python-dotenv** (Security)
+1. Create and activate a virtual environment.
+2. Install dependencies:
 
-## ⚙️ Setup & Installation
+```bash
+pip install -r requirements.txt
+```
 
-1. **Clone the repository:**
-   ```bash
-   git clone [https://github.com/alinplotnik/job_hunter_agent.git](https://github.com/alinplotnik/job_hunter_agent.git)
-   cd job_hunter_agent
+3. Create a `.env` file in the project root and add:
+
+```env
+GEMINI_API_KEY=your_api_key_here
+```
+
+4. Start the app:
+
+```bash
+streamlit run app.py
+```
+
+5. Open the local URL shown by Streamlit.
+
+## Host Online (Recommended: Streamlit Community Cloud)
+
+This is the fastest way to make the app available from your phone.
+
+1. Push this folder to GitHub.
+2. Go to Streamlit Community Cloud and create a new app from your repo.
+3. Set these app values:
+- Main file path: `app.py`
+- Python version: from `runtime.txt` (`python-3.11`)
+4. In Streamlit app settings, add a secret:
+
+```toml
+GEMINI_API_KEY = "your_api_key_here"
+```
+
+5. Deploy.
+
+After deploy, Streamlit gives you a public HTTPS URL. Open that URL on your phone.
+
+## Why This Works in Cloud
+
+`app.py` now loads `GEMINI_API_KEY` from Streamlit secrets before importing the core logic module, so the app starts correctly in hosted environments.
+
+## Project Structure
+
+```text
+job_hunter_agent/
+   app.py
+   main.py
+   requirements.txt
+   runtime.txt
+   .streamlit/
+      config.toml
+   inputs/
+   outputs/
+```
+
+## Notes
+
+- Keep `inputs/` and `outputs/` out of git if they contain private data.
+- The generated reports are text files under `outputs/`.
+- If deploy fails due to dependency build issues, try pinning Python to `3.10` in `runtime.txt`.

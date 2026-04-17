@@ -1,7 +1,30 @@
 import streamlit as st
 import os
 import tempfile
-import main  # Imports your logic
+
+
+def _bootstrap_api_key() -> None:
+    """Ensure GEMINI_API_KEY is available in cloud/local environments before importing main."""
+    if os.getenv("GEMINI_API_KEY"):
+        return
+
+    try:
+        secret_key = st.secrets.get("GEMINI_API_KEY")
+        if secret_key:
+            os.environ["GEMINI_API_KEY"] = secret_key
+    except Exception:
+        # st.secrets may not be configured in local runs.
+        pass
+
+
+_bootstrap_api_key()
+MAIN_IMPORT_ERROR = None
+main = None
+try:
+    import main as job_hunter_main  # Imports your logic after env setup
+    main = job_hunter_main
+except Exception as exc:
+    MAIN_IMPORT_ERROR = str(exc)
 
 # --- Page Config ---
 st.set_page_config(
@@ -95,8 +118,15 @@ with col2:
 # --- Run Button ---
 run_pressed = st.button("🚀 Analyze Application", type="primary", use_container_width=True)
 
+if MAIN_IMPORT_ERROR:
+    st.warning("API key is missing or invalid. Configure GEMINI_API_KEY in .env (local) or Streamlit Secrets (cloud).")
+    with st.expander("Technical details"):
+        st.code(MAIN_IMPORT_ERROR)
+
 if run_pressed:
-    if not uploaded_file or not job_description:
+    if MAIN_IMPORT_ERROR:
+        st.error("The agent cannot run until GEMINI_API_KEY is configured.")
+    elif not uploaded_file or not job_description:
         st.error("⚠️ Please provide both a Resume (PDF) and a Job Description.")
     else:
         # Create a status container

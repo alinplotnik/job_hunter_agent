@@ -24,9 +24,10 @@ genai.configure(api_key=api_key)
 # Use the stable Flash model
 model = genai.GenerativeModel('gemini-flash-latest')
 
-# Define input/output directories
-OUTPUT_DIR = "outputs"
-INPUT_DIR = "inputs"
+# Define input/output directories relative to this file, not the current shell cwd.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+INPUT_DIR = os.path.join(BASE_DIR, "inputs")
 
 
 # --- 2. Helper Functions ---
@@ -54,7 +55,7 @@ def validate_content_is_resume(text_snippet):
     """
 
     try:
-        response = model.generate_content(prompt_check)
+        response = model.generate_content(prompt_check, request_options={"timeout": 120})
         data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
         return data.get("is_resume", False), data.get("reason", "Unknown")
     except Exception as e:
@@ -206,7 +207,7 @@ def check_ats_compatibility_visual(pdf_path, extracted_text):
 
     try:
         # Send both Image and Text prompt to Gemini
-        response = model.generate_content([final_prompt, resume_image])
+        response = model.generate_content([final_prompt, resume_image], request_options={"timeout": 120})
 
         # Clean json
         cleaned_json = response.text.replace("```json", "").replace("```", "").strip()
@@ -333,7 +334,7 @@ def process_application(resume_path, resume_text, job_description):
     """
 
     try:
-        response_ats = model.generate_content(prompt_ats)
+        response_ats = model.generate_content(prompt_ats, request_options={"timeout": 120})
         raw_text = response_ats.text
         json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
 
@@ -395,7 +396,7 @@ def process_application(resume_path, resume_text, job_description):
     current_date = datetime.now().strftime("%B %d, %Y")
 
     prompt_batch = f"""
-    Act as a Hiring Manager and Technical Recruiter.
+    Act as a Hiring Manager and Recruiter.
     Job Description: {job_description}
     Resume: {resume_text}
 
@@ -449,7 +450,7 @@ def process_application(resume_path, resume_text, job_description):
     experience_level = "Entry-Level/Student"
 
     try:
-        response = model.generate_content(prompt_batch)
+        response = model.generate_content(prompt_batch, request_options={"timeout": 120})
         cleaned_json = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(cleaned_json)
 
@@ -540,7 +541,7 @@ def process_application(resume_path, resume_text, job_description):
     """
 
     try:
-        response_q = model.generate_content(prompt_extraction)
+        response_q = model.generate_content(prompt_extraction, request_options={"timeout": 120})
         cleaned_json_q = response_q.text.replace("```json", "").replace("```", "").strip()
         qa_list = json.loads(cleaned_json_q)
 
@@ -618,4 +619,6 @@ if __name__ == "__main__":
 
             print("\n--- 🏁 Done! Created files in 'outputs' directory ---")
     else:
-        print(f"❌ Error: Missing input files in '{INPUT_DIR}' directory.")
+        print("❌ Error: Missing input files.")
+        print(f"   Expected resume at: {resume_path}")
+        print(f"   Expected job description at: {job_desc_path}")
