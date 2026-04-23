@@ -109,11 +109,24 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("1. Upload Resume")
     uploaded_file = st.file_uploader("Upload your PDF Resume", type="pdf", help="Must be a readable PDF file")
+    if uploaded_file is not None:
+        st.caption("Filename does not matter. The app reads only the PDF content.")
+        file_size_mb = uploaded_file.size / (1024 * 1024)
+        st.caption(f"File size: {file_size_mb:.2f} MB")
+        if file_size_mb > 15:
+            st.warning("Large PDFs can crash lightweight cloud containers. If possible, upload a smaller PDF.")
 
 with col2:
     st.subheader("2. Job Description")
     job_description = st.text_area("Paste the JD here...", height=150,
                                    placeholder="e.g. 'We are looking for a Senior Python Developer...'")
+
+with st.expander("Advanced Options"):
+    enable_visual_check = st.checkbox(
+        "Run visual ATS scan (slower and can fail on some PDFs)",
+        value=False,
+        help="Keeps the app more stable in cloud mode when disabled."
+    )
 
 # --- Run Button ---
 run_pressed = st.button("🚀 Analyze Application", type="primary", use_container_width=True)
@@ -135,7 +148,7 @@ if run_pressed:
         try:
             # 1. Save temp file
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
+                tmp_file.write(uploaded_file.getbuffer())
                 tmp_path = tmp_file.name
 
             # 2. Extract Text
@@ -150,7 +163,12 @@ if run_pressed:
                 status_box.write("🧠 Analyzing fit, checking visuals, and generating prep...")
 
                 # CALL MAIN LOGIC
-                st.session_state['results'] = main.process_application(tmp_path, resume_text, job_description)
+                st.session_state['results'] = main.process_application(
+                    tmp_path,
+                    resume_text,
+                    job_description,
+                    enable_visual_check=enable_visual_check,
+                )
 
                 status_box.update(label="Analysis Complete!", state="complete", expanded=False)
 

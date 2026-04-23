@@ -224,7 +224,7 @@ def check_ats_compatibility_visual(pdf_path, extracted_text):
 # --- 3. Main Logic ---
 
 # ************** START CHANGE: Updated arguments and added Visual Check Logic **************
-def process_application(resume_path, resume_text, job_description):
+def process_application(resume_path, resume_text, job_description, enable_visual_check=True):
     """
     Orchestrates the process.
     NOW ACCEPTS 'resume_path' to enable visual checking.
@@ -245,9 +245,12 @@ def process_application(resume_path, resume_text, job_description):
     print("\n--- 📉 Running BUDGET Mode (Simulated Agent) ---")
 
     # --- [NEW] Visual Layout Check (Does NOT stop execution, just reports) ---
-    visual_report = check_ats_compatibility_visual(resume_path, resume_text)
+    visual_report = None
     visual_risk_level = "LOW"
     visual_issue_desc = "None"
+
+    if enable_visual_check:
+        visual_report = check_ats_compatibility_visual(resume_path, resume_text)
 
     if visual_report:
         visual_risk_level = visual_report.get('layout_risk', 'LOW')
